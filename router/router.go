@@ -107,14 +107,14 @@ func (rt *Router) HandleRequest(c *fiber.Ctx) error {
 		if len(providers) == 0 {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "no providers available"})
 		}
-		return rt.routeWithFallback(c, providers, reqModel, reqBody)
+		return rt.routeWithFallback(c, providers, resolvedModel, reqBody)
 	}
 
 	isStream := reqBody["stream"] == true
 	if isStream {
-		return rt.streamUpstream(c, p, reqModel, reqBody)
+		return rt.streamUpstream(c, p, resolvedModel, reqBody)
 	}
-	return rt.routeWithFallback(c, []*provider.Provider{p}, reqModel, reqBody)
+	return rt.routeWithFallback(c, []*provider.Provider{p}, resolvedModel, reqBody)
 }
 
 // ---------------------------------------------------------------------------
@@ -132,10 +132,11 @@ func (rt *Router) resolveModel(reqModel string) (*provider.Provider, string) {
 		}
 	}
 
-	// 2) Prefix match: "openai/gpt-4o" → strip "openai/" and find provider
+	// 2) Prefix match: "JEROUTER/f/mimo-v2.5-free" → strip "JEROUTER/" and find provider
 	for name, p := range rt.Providers {
 		if p.Prefix != "" && strings.HasPrefix(reqModel, p.Prefix) {
 			stripped := strings.TrimPrefix(reqModel, p.Prefix)
+			stripped = strings.TrimPrefix(stripped, "/") // strip separator
 			if rt.providerHasModel(p, stripped) || rt.providerHasModel(p, "*") {
 				return p, stripped
 			}
@@ -378,12 +379,14 @@ func (rt *Router) routeWithFallback(c *fiber.Ctx, providers []*provider.Provider
 // ---------------------------------------------------------------------------
 
 func (rt *Router) forwardRequest(p *provider.Provider, model string, reqBody map[string]interface{}) ([]byte, error) {
-	// Resolve model
+	// Resolve model — only use DefaultModel when no specific model resolved
 	upstreamModel := model
-	if p.DefaultModel != "" {
-		upstreamModel = p.DefaultModel
-	} else if len(p.Models) > 0 && p.Models[0] != "*" {
-		upstreamModel = p.Models[0]
+	if upstreamModel == "" || upstreamModel == "*" {
+		if p.DefaultModel != "" {
+			upstreamModel = p.DefaultModel
+		} else if len(p.Models) > 0 && p.Models[0] != "*" {
+			upstreamModel = p.Models[0]
+		}
 	}
 
 	// Build request body with remapped model
@@ -447,12 +450,14 @@ func (rt *Router) forwardRequest(p *provider.Provider, model string, reqBody map
 // ---------------------------------------------------------------------------
 
 func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model string, reqBody map[string]interface{}) error {
-	// Resolve model
+	// Resolve model — only use DefaultModel when no specific model resolved
 	upstreamModel := model
-	if p.DefaultModel != "" {
-		upstreamModel = p.DefaultModel
-	} else if len(p.Models) > 0 && p.Models[0] != "*" {
-		upstreamModel = p.Models[0]
+	if upstreamModel == "" || upstreamModel == "*" {
+		if p.DefaultModel != "" {
+			upstreamModel = p.DefaultModel
+		} else if len(p.Models) > 0 && p.Models[0] != "*" {
+			upstreamModel = p.Models[0]
+		}
 	}
 
 	bodyCopy := deepCopyMap(reqBody)
@@ -489,14 +494,15 @@ func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model strin
 
 	start := time.Now()
 	streamClient := &http.Client{
-		Timeout: 120 * time.Second,
+		Timeout: 120 * time.Second, // overall client timeout
 		Transport: &http.Transport{
 			DialContext: (&net.Dialer{
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
+			Proxy:                  nil,
 			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
+			ResponseHeaderTimeout:  0, // disabled for streaming — slow models need time before first byte
 			IdleConnTimeout:       90 * time.Second,
 		},
 	}
@@ -605,10 +611,12 @@ func (rt *Router) streamWithFailover(c *fiber.Ctx, routes []config.ComboRoute, r
 		if err == nil {
 			return nil
 		}
-		// If TTFT timeout, try next provider; if any other error, return it
-		if !strings.Contains(err.Error(), "TTFT timeout") {
-			return err
+		// Fallback on timeout errors (TTFT timeout, context deadline, etc)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "TTFT timeout") || strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "deadline") {
+			continue
 		}
+		return err
 	}
 
 	return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "all streaming providers failed"})
