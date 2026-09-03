@@ -121,6 +121,14 @@ func main() {
 				})
 			}
 		}
+		// Add combo names as routable model entries
+		for _, combo := range cfg.Combos {
+			models = append(models, modelObj{
+				ID:      combo.Name,
+				Object:  "model",
+				OwnedBy: "combo",
+			})
+		}
 		return c.JSON(fiber.Map{
 			"object": "list",
 			"data":   models,
