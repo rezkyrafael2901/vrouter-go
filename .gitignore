@@ -1,0 +1,6 @@
+vrouter-go
+*.exe
+*.test
+*.prof
+router_state.json
+config.yaml

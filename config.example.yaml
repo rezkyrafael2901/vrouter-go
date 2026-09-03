@@ -1,0 +1,53 @@
+# Example VRouter-Go configuration
+# Copy to config.yaml and customize
+
+router:
+  health_check_interval: 120    # seconds between health checks
+  cb_fail_threshold: 3          # failures before circuit breaker trips
+  cb_lock_seconds: 180          # how long provider stays locked
+  hedge_race_timeout: 3         # seconds for speculative hedge race
+  speculative_hedge: false      # enable dual-provider racing
+  health_score_routing: true    # use health score for routing decisions
+  max_fallback_attempts: 3      # max provider attempts per request
+  max_retries_per_provider: 2   # retries within single provider
+  prime_timeout: 8              # TTFT timeout before failover
+
+providers:
+  - name: "openrouter"
+    api_base: "https://openrouter.ai/api/v1"
+    keys:
+      - "sk-or-v1-your-key-here"
+    prefix: ""
+    models:
+      - "deepseek/deepseek-chat"
+      - "anthropic/claude-sonnet-4"
+      - "google/gemini-2.5-flash"
+    default_model: "deepseek/deepseek-chat"
+    weight: 10
+    is_active: true
+    api_type: "openai"
+
+  - name: "jerouter"
+    api_base: "https://api.jerouter.com/v1"
+    keys:
+      - "your-jerouter-key"
+    prefix: "JEROUTER"
+    models:
+      - "deepseek-v4-flash"
+      - "gemini-2.5-flash"
+    default_model: "deepseek-v4-flash"
+    weight: 8
+    is_active: true
+    api_type: "openai"
+    keep_prefix: true
+
+combos:
+  - name: "default"
+    strategy: "weighted"
+    routes:
+      - provider: "jerouter"
+        model: "deepseek-v4-flash"
+        weight: 10
+      - provider: "openrouter"
+        model: "deepseek/deepseek-chat"
+        weight: 5
