@@ -98,9 +98,32 @@ func main() {
 			}
 		}
 		return c.JSON(fiber.Map{
-			"ok":      true,
-			"version": VERSION,
+			"ok":        true,
+			"version":   VERSION,
 			"providers": healthy,
+		})
+	})
+
+	// List all models endpoint (OpenAI-compatible GET /v1/models)
+	app.Get("/v1/models", func(c *fiber.Ctx) error {
+		type modelObj struct {
+			ID      string `json:"id"`
+			Object  string `json:"object"`
+			OwnedBy string `json:"owned_by"`
+		}
+		models := make([]modelObj, 0)
+		for _, p := range provider.All() {
+			for _, m := range p.Models {
+				models = append(models, modelObj{
+					ID:      p.Prefix + "/" + m,
+					Object:  "model",
+					OwnedBy: p.Name,
+				})
+			}
+		}
+		return c.JSON(fiber.Map{
+			"object": "list",
+			"data":   models,
 		})
 	})
 

@@ -63,11 +63,12 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 		Weight    int      `json:"weight"`
 		IsActive  bool     `json:"is_active"`
 		ApiType   string   `json:"type"`
-		KeysCount int      `json:"key_count"`
-		Failures  int      `json:"failures"`
-		Locked    bool     `json:"locked"`
-		Healthy   bool     `json:"healthy"`
-		Proxy     string   `json:"proxy"`
+		KeysCount   int      `json:"key_count"`
+		ModelsCount int      `json:"models_count"`
+		Failures    int      `json:"failures"`
+		Locked      bool     `json:"locked"`
+		Healthy     bool     `json:"healthy"`
+		Proxy       string   `json:"proxy"`
 	}
 	providers := provider.All()
 	provs := make([]provResp, 0, len(providers))
@@ -82,7 +83,8 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 		provs = append(provs, provResp{
 			Name: p.Name, ApiBase: p.ApiBase, Prefix: p.Prefix, Models: p.Models,
 			Default: p.DefaultModel, Weight: p.Weight, IsActive: p.IsActive, ApiType: p.ApiType,
-			KeysCount: len(p.Keys), Failures: p.Failures, Locked: p.IsLocked(), Healthy: p.IsHealthy(), Proxy: p.Proxy,
+			KeysCount: len(p.Keys), ModelsCount: len(p.Models), Failures: p.Failures,
+			Locked: p.IsLocked(), Healthy: p.IsHealthy(), Proxy: p.Proxy,
 		})
 	}
 
@@ -288,19 +290,20 @@ func (a *API) handleDeadModels(c *fiber.Ctx) error {
 
 func (a *API) handleProviders(c *fiber.Ctx) error {
 	type provResp struct {
-		Name      string   `json:"name"`
-		ApiBase   string   `json:"base_url"`
-		Prefix    string   `json:"prefix"`
-		Models    []string `json:"models"`
-		Default   string   `json:"default_model"`
-		Weight    int      `json:"weight"`
-		IsActive  bool     `json:"is_active"`
-		ApiType   string   `json:"type"`
-		KeysCount int      `json:"key_count"`
-		Failures  int      `json:"failures"`
-		Locked    bool     `json:"locked"`
-		Healthy   bool     `json:"healthy"`
-		Proxy     string   `json:"proxy"`
+		Name        string   `json:"name"`
+		ApiBase     string   `json:"base_url"`
+		Prefix      string   `json:"prefix"`
+		Models      []string `json:"models"`
+		Default     string   `json:"default_model"`
+		Weight      int      `json:"weight"`
+		IsActive    bool     `json:"is_active"`
+		ApiType     string   `json:"type"`
+		KeysCount   int      `json:"key_count"`
+		ModelsCount int      `json:"models_count"`
+		Failures    int      `json:"failures"`
+		Locked      bool     `json:"locked"`
+		Healthy     bool     `json:"healthy"`
+		Proxy       string   `json:"proxy"`
 	}
 	providers := provider.All()
 	result := make([]provResp, 0, len(providers))
@@ -308,7 +311,8 @@ func (a *API) handleProviders(c *fiber.Ctx) error {
 		result = append(result, provResp{
 			Name: p.Name, ApiBase: p.ApiBase, Prefix: p.Prefix, Models: p.Models,
 			Default: p.DefaultModel, Weight: p.Weight, IsActive: p.IsActive, ApiType: p.ApiType,
-			KeysCount: len(p.Keys), Failures: p.Failures, Locked: p.IsLocked(), Healthy: p.IsHealthy(), Proxy: p.Proxy,
+			KeysCount: len(p.Keys), ModelsCount: len(p.Models), Failures: p.Failures,
+			Locked: p.IsLocked(), Healthy: p.IsHealthy(), Proxy: p.Proxy,
 		})
 	}
 	return c.JSON(fiber.Map{"providers": result})

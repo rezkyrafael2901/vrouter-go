@@ -2215,7 +2215,7 @@ function renderProviders(){
       <div class="p-badges">
         <span class="badge ${p.healthy?'badge-green':'badge-red'}"><span class="badge-dot"></span>${p.healthy?'Healthy':'Down'}</span>
         <span class="badge badge-blue">${p.key_count||0} ${(p.key_count||0)===1?'key':'keys'}</span>
-        <span class="badge badge-blue">${p.models_count||0} models</span>
+        <span class="badge badge-blue">${p.models_count||(p.models||[]).length||0} models</span>
         <span class="badge ${cur?'badge-cyan':'badge-gray'}" title="${esc(cur)}">${cur?esc(cur):'Direct'}</span>
       </div>
       ${spark||''}
