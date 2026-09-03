@@ -46,13 +46,32 @@ func (a *API) Register(app *fiber.App) {
 	api.Post("/health-check", a.handleHealthCheckTrigger)
 	api.Post("/refresh-all-models", a.handleRefreshAllModels)
 }
-
 func (a *API) handleStatus(c *fiber.Ctx) error {
+
 	totalReqs := int64(0)
 	totalErrs := int64(0)
 	healthy := 0
 	unhealthy := 0
-	for _, p := range provider.All() {
+
+	// Build providers array inline
+	type provResp struct {
+		Name      string   `json:"name"`
+		ApiBase   string   `json:"base_url"`
+		Prefix    string   `json:"prefix"`
+		Models    []string `json:"models"`
+		Default   string   `json:"default_model"`
+		Weight    int      `json:"weight"`
+		IsActive  bool     `json:"is_active"`
+		ApiType   string   `json:"type"`
+		KeysCount int      `json:"key_count"`
+		Failures  int      `json:"failures"`
+		Locked    bool     `json:"locked"`
+		Healthy   bool     `json:"healthy"`
+		Proxy     string   `json:"proxy"`
+	}
+	providers := provider.All()
+	provs := make([]provResp, 0, len(providers))
+	for _, p := range providers {
 		totalReqs += int64(p.TotalRequests)
 		totalErrs += int64(p.TotalErrors)
 		if p.IsHealthy() {
@@ -60,12 +79,38 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 		} else {
 			unhealthy++
 		}
+		provs = append(provs, provResp{
+			Name: p.Name, ApiBase: p.ApiBase, Prefix: p.Prefix, Models: p.Models,
+			Default: p.DefaultModel, Weight: p.Weight, IsActive: p.IsActive, ApiType: p.ApiType,
+			KeysCount: len(p.Keys), Failures: p.Failures, Locked: p.IsLocked(), Healthy: p.IsHealthy(), Proxy: p.Proxy,
+		})
 	}
+
+	// Build combos array inline
+	type routeResp struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		Weight   int    `json:"weight"`
+	}
+	type comboResp struct {
+		Name     string      `json:"name"`
+		Strategy string      `json:"strategy"`
+		Routes   []routeResp `json:"routes"`
+	}
+	combos := make([]comboResp, 0, len(a.Config.Combos))
+	for _, combo := range a.Config.Combos {
+		routes := make([]routeResp, 0, len(combo.Routes))
+		for _, r := range combo.Routes {
+			routes = append(routes, routeResp{Provider: r.Provider, Model: r.Model, Weight: int(r.Weight)})
+		}
+		combos = append(combos, comboResp{Name: combo.Name, Strategy: combo.Strategy, Routes: routes})
+	}
+
 	return c.JSON(fiber.Map{
 		"ok":                    true,
 		"ts":                    time.Now().Unix(),
 		"version":               "1.0.0-go",
-		"total_providers":       len(provider.All()),
+		"total_providers":       len(providers),
 		"total_requests":        totalReqs,
 		"total_errors":          totalErrs,
 		"healthy_providers":     healthy,
@@ -73,6 +118,9 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 		"model_stats_count":     stats.ModelStatsCount(),
 		"throughput_count":      stats.ThroughputCount(),
 		"dead_models_count":     stats.DeadModelCount(),
+		"providers":             provs,
+		"combos":                combos,
+		"proxies":               []string{},
 	})
 }
 
