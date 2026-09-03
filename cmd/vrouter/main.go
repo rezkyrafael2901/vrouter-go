@@ -112,6 +112,15 @@ func main() {
 			OwnedBy string `json:"owned_by"`
 		}
 		models := make([]modelObj, 0)
+		// Combos first — so they appear at top of /model list
+		for _, combo := range cfg.Combos {
+			models = append(models, modelObj{
+				ID:      combo.Name,
+				Object:  "model",
+				OwnedBy: "combo",
+			})
+		}
+		// Then individual models from providers
 		for _, p := range provider.All() {
 			for _, m := range p.Models {
 				models = append(models, modelObj{
@@ -120,14 +129,6 @@ func main() {
 					OwnedBy: p.Name,
 				})
 			}
-		}
-		// Add combo names as routable model entries
-		for _, combo := range cfg.Combos {
-			models = append(models, modelObj{
-				ID:      combo.Name,
-				Object:  "model",
-				OwnedBy: "combo",
-			})
 		}
 		return c.JSON(fiber.Map{
 			"object": "list",
