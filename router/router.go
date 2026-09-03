@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -411,7 +412,18 @@ func (rt *Router) forwardRequest(p *provider.Provider, model string, reqBody map
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{
+		Timeout: 120 * time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("upstream request failed: %w", err)
@@ -476,7 +488,19 @@ func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model strin
 	req = req.WithContext(ctx)
 
 	start := time.Now()
-	resp, err := http.DefaultTransport.RoundTrip(req)
+	streamClient := &http.Client{
+		Timeout: 120 * time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
+	resp, err := streamClient.Do(req)
 	if err != nil {
 		p.RecordFailure("stream connect: " + err.Error())
 		return err
@@ -569,7 +593,7 @@ func (rt *Router) streamWithFailover(c *fiber.Ctx, routes []config.ComboRoute, r
 	for _, route := range routes {
 		p, ok := rt.Providers[route.Provider]
 		if !ok || !p.IsHealthy() || !p.HasKeys() {
-			continue
+				continue
 		}
 
 		model := route.Model

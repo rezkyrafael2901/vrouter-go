@@ -4,3 +4,4 @@ vrouter-go
 *.prof
 router_state.json
 config.yaml
+vrouter
