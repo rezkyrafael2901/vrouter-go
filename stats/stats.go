@@ -404,3 +404,74 @@ func ResetThroughput() {
 	defer mu.Unlock()
 	THROUGHPUT_STATS = make(map[string]*ThroughputStats)
 }
+
+// ---------------------------------------------------------------------------
+// Request History
+// ---------------------------------------------------------------------------
+
+const maxHistory = 200
+
+type HistoryEntry struct {
+    ID        int       `json:"id"`
+    Timestamp time.Time `json:"timestamp"`
+    Method    string    `json:"method"`
+    Model     string    `json:"model"`
+    Provider  string    `json:"provider"`
+    Status    string    `json:"status"`  // "ok" or "error"
+    LatencyMs float64   `json:"latency_ms"`
+    Error     string    `json:"error,omitempty"`
+    IP        string    `json:"ip,omitempty"`
+}
+
+var (
+    history      []*HistoryEntry
+    historyID    int
+)
+
+// LogHistory appends a request entry to the in-memory history ring buffer.
+func LogHistory(model, provider, status, errStr, ip string, latencyMs float64) {
+    mu.Lock()
+    defer mu.Unlock()
+
+    historyID++
+    entry := &HistoryEntry{
+        ID:        historyID,
+        Timestamp: time.Now(),
+        Method:    "POST",
+        Model:     model,
+        Provider:  provider,
+        Status:    status,
+        LatencyMs: latencyMs,
+        Error:     errStr,
+        IP:        ip,
+    }
+
+    if len(history) >= maxHistory {
+        // drop oldest
+        history = history[1:]
+    }
+    history = append(history, entry)
+}
+
+// AllHistory returns a snapshot of the history ring buffer (newest first).
+func AllHistory() []*HistoryEntry {
+    mu.RLock()
+    defer mu.RUnlock()
+
+    out := make([]*HistoryEntry, len(history))
+    for i, e := range history {
+        out[i] = e
+    }
+    // reverse: newest first
+    for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+        out[i], out[j] = out[j], out[i]
+    }
+    return out
+}
+
+// ClearHistory resets the history buffer.
+func ClearHistory() {
+    mu.Lock()
+    defer mu.Unlock()
+    history = nil
+}

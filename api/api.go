@@ -349,11 +349,13 @@ func (a *API) handleLogout(c *fiber.Ctx) error {
 }
 
 func (a *API) handleHistory(c *fiber.Ctx) error {
-	return c.JSON(fiber.Map{"history": []string{}, "total": 0})
+	history := stats.AllHistory()
+	return c.JSON(fiber.Map{"history": history, "total": len(history)})
 }
 
 func (a *API) handleClearHistory(c *fiber.Ctx) error {
-	return c.JSON(fiber.Map{"ok": true, "cleared": 0})
+	stats.ClearHistory()
+	return c.JSON(fiber.Map{"ok": true, "cleared": true})
 }
 
 func (a *API) handleCosts(c *fiber.Ctx) error {
