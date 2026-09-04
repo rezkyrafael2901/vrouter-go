@@ -33,6 +33,7 @@ func (a *API) Register(app *fiber.App) {
 	api.Post("/providers", a.handleAddProvider)
 	api.Put("/providers/:name", a.handleUpdateProvider)
 	api.Post("/providers/:name/fetch-models", a.handleFetchModels)
+	api.Delete("/providers/:name", a.handleDeleteProvider)
 	api.Get("/combos", a.handleCombos)
 	api.Post("/login", a.handleLogin)
 	api.Post("/logout", a.handleLogout)
@@ -440,6 +441,22 @@ func (a *API) handleUpdateProvider(c *fiber.Ctx) error {
 func (a *API) handleFetchModels(c *fiber.Ctx) error {
 	name := c.Params("name")
 	return c.JSON(fiber.Map{"ok": true, "provider": name, "models": []string{}})
+}
+
+func (a *API) handleDeleteProvider(c *fiber.Ctx) error {
+	name := c.Params("name")
+	if provider.Get(name) == nil {
+		return c.Status(404).JSON(fiber.Map{"error": "provider not found"})
+	}
+	provider.Remove(name)
+	// Remove from config in-memory
+	for i, p := range a.Config.Providers {
+		if p.Name == name {
+			a.Config.Providers = append(a.Config.Providers[:i], a.Config.Providers[i+1:]...)
+			break
+		}
+	}
+	return c.JSON(fiber.Map{"ok": true, "deleted": name, "note": "removed from memory. Restart to persist."})
 }
 
 func (a *API) handleHealthCheckTrigger(c *fiber.Ctx) error {

@@ -172,6 +172,17 @@ func AllMap() map[string]*Provider {
 	return out
 }
 
+// Remove deletes a provider by name from the in-memory registry.
+func Remove(name string) bool {
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	if _, ok := providers[name]; ok {
+		delete(providers, name)
+		return true
+	}
+	return false
+}
+
 // InitFromConfig creates Provider instances from config and registers them.
 func InitFromConfig(cfgProviders []config.Provider) {
 	for _, cp := range cfgProviders {
