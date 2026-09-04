@@ -1816,13 +1816,54 @@ function startAutoRefresh(intervalMs){
         renderOverviewAlerts();
         renderTopModels();
         renderMiniTraffic();
+        // Update KPI cards in-place (real-time)
+        updateKPIs();
         // Update the stat values inline
         const statVals=document.querySelectorAll('.stat-val');
         const vals=[String(s.total_providers||0),String(s.healthy_providers||0),String(s.unhealthy_providers||0),fmtNum(s.total_requests||0),fmtNum(t.in),fmtNum(t.out),fmtCost(t.cost)];
         statVals.forEach((el,i)=>{if(vals[i]!==undefined&&el.textContent!==vals[i])el.textContent=vals[i]});
-      }).catch(()=>{});
+      }).catch(()=>{})
     }
   },intervalMs);
+}
+
+/* ═══ UPDATE KPI CARDS REAL-TIME ═══ */
+function updateKPIs(){
+  const s=state;
+  const agg=s.agg||{total:{},today:{}};
+  const t=agg.total||{}, d=agg.today||{};
+  const totalReq=(t.ok||0)+(s.total_errors||0);
+  const sr=totalReq>0?Math.round(((t.ok||0)/totalReq)*100):100;
+  const allSeries=Object.values(s.latency_series||{});
+  const flatLat=allSeries.flat();
+  const avgLat=flatLat.length?Math.round(flatLat.reduce((a,b)=>a+b,0)/flatLat.length):0;
+  const cards=[
+    fmtNum(s.total_providers||0),
+    sr+'%',
+    fmtNum(s.total_requests||0),
+    fmtNum(t.in||0),
+    fmtNum(t.out||0),
+    fmtCost(t.cost||0),
+    Math.round(avgLat||0)+'ms'
+  ];
+  const subCards=[
+    'active upstreams',
+    'all time',
+    'all time',
+    'today '+fmtNum(d.in||0),
+    'today '+fmtNum(d.out||0),
+    'today '+fmtCost(d.cost||0),
+    'avg '+Math.round(avgLat||0)+'ms'
+  ];
+  const kpiCards=document.querySelectorAll('#kpiRow .kpi-card');
+  kpiCards.forEach((card,i)=>{
+    if(cards[i]!==undefined){
+      const val=card.querySelector('.kpi-value');
+      const sub=card.querySelector('.kpi-sub');
+      if(val&&val.textContent!==cards[i])val.textContent=cards[i];
+      if(sub&&sub.textContent!==subCards[i])sub.textContent=subCards[i];
+    }
+  });
 }
 
 /* ═══ LATENCY SUMMARY CARD ═══ */
