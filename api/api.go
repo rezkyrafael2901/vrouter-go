@@ -117,13 +117,23 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 	aggrOk := int64(0)
 	aggrIn := int64(0)
 	aggrOut := int64(0)
+	aggrMs := float64(0)
+	aggrMsCount := 0
 	history := stats.AllHistory()
+	latencySeries := make(map[string][]float64)
 	for _, h := range history {
 		if h.Status == "ok" {
 			aggrOk++
 		}
 		aggrIn += int64(h.PromptTokens)
 		aggrOut += int64(h.CompletionTokens)
+		if h.Ms > 0 {
+			aggrMs += h.Ms
+			aggrMsCount++
+		}
+		if h.Ms > 0 && h.Model != "" {
+			latencySeries[h.Model] = append(latencySeries[h.Model], h.Ms)
+		}
 	}
 	successRate := 100.0
 	if totalReqs > 0 {
@@ -147,6 +157,8 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 		"proxies":               []string{},
 		"history":               history,
 		"success_rate":           successRate,
+		"latency_series":         latencySeries,
+		"avg_latency_ms":         aggrMs / float64(max(aggrMsCount, 1)),
 		"agg": map[string]interface{}{
 			"total": map[string]interface{}{
 				"ok":   aggrOk,
