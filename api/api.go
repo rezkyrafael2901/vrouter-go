@@ -456,7 +456,25 @@ func (a *API) handleDeleteProvider(c *fiber.Ctx) error {
 			break
 		}
 	}
-	return c.JSON(fiber.Map{"ok": true, "deleted": name, "note": "removed from memory. Restart to persist."})
+	// Remove combos that reference this provider
+	var kept []config.Combo
+	removedCombos := 0
+	for _, combo := range a.Config.Combos {
+		hasRef := false
+		for _, r := range combo.Routes {
+			if r.Provider == name {
+				hasRef = true
+				break
+			}
+		}
+		if !hasRef {
+			kept = append(kept, combo)
+		} else {
+			removedCombos++
+		}
+	}
+	a.Config.Combos = kept
+	return c.JSON(fiber.Map{"ok": true, "deleted": name, "removed_combos": removedCombos})
 }
 
 func (a *API) handleHealthCheckTrigger(c *fiber.Ctx) error {
