@@ -72,9 +72,13 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 	}
 	providers := provider.All()
 	provs := make([]provResp, 0, len(providers))
+	// Compute totals from stats (router updates these, not provider.TotalRequests)
+	allStats := stats.AllModelStats()
+	for _, s := range allStats {
+		totalReqs += int64(s.Total)
+		totalErrs += int64(s.Err)
+	}
 	for _, p := range providers {
-		totalReqs += int64(p.TotalRequests)
-		totalErrs += int64(p.TotalErrors)
 		if p.IsHealthy() {
 			healthy++
 		} else {
@@ -108,6 +112,24 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 		combos = append(combos, comboResp{Name: combo.Name, Strategy: combo.Strategy, Routes: routes})
 	}
 
+
+	// Compute aggregate stats from history
+	aggrOk := int64(0)
+	aggrIn := int64(0)
+	aggrOut := int64(0)
+	history := stats.AllHistory()
+	for _, h := range history {
+		if h.Status == "ok" {
+			aggrOk++
+		}
+		aggrIn += int64(h.PromptTokens)
+		aggrOut += int64(h.CompletionTokens)
+	}
+	successRate := 100.0
+	if totalReqs > 0 {
+		successRate = float64(totalReqs-totalErrs) / float64(totalReqs) * 100
+	}
+
 	return c.JSON(fiber.Map{
 		"ok":                    true,
 		"ts":                    time.Now().Unix(),
@@ -123,7 +145,22 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 		"providers":             provs,
 		"combos":                combos,
 		"proxies":               []string{},
-		"history":               stats.AllHistory(),
+		"history":               history,
+		"success_rate":           successRate,
+		"agg": map[string]interface{}{
+			"total": map[string]interface{}{
+				"ok":   aggrOk,
+				"in":   aggrIn,
+				"out":  aggrOut,
+				"cost": 0.0,
+			},
+			"today": map[string]interface{}{
+				"ok":   aggrOk,
+				"in":   aggrIn,
+				"out":  aggrOut,
+				"cost": 0.0,
+			},
+		},
 	})
 }
 
