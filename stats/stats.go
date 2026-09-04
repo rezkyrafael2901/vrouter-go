@@ -412,15 +412,20 @@ func ResetThroughput() {
 const maxHistory = 200
 
 type HistoryEntry struct {
-    ID        int       `json:"id"`
-    Timestamp time.Time `json:"timestamp"`
-    Method    string    `json:"method"`
-    Model     string    `json:"model"`
-    Provider  string    `json:"provider"`
-    Status    string    `json:"status"`  // "ok" or "error"
-    LatencyMs float64   `json:"latency_ms"`
-    Error     string    `json:"error,omitempty"`
-    IP        string    `json:"ip,omitempty"`
+    ID               int       `json:"id"`
+    Timestamp        time.Time `json:"timestamp"`
+    Ts               int64     `json:"ts"`                    // Unix seconds (dashboard expects this)
+    Method           string    `json:"method"`
+    Model            string    `json:"model"`
+    Provider         string    `json:"provider"`
+    Status           string    `json:"status"`                // "ok" or "err"
+    Ms               float64   `json:"ms"`                    // latency ms (dashboard expects this)
+    LatencyMs        float64   `json:"latency_ms,omitempty"`  // keep for API compat
+    PromptTokens     int       `json:"prompt_tokens,omitempty"`
+    CompletionTokens int       `json:"completion_tokens,omitempty"`
+    EstCostUsd       float64   `json:"est_cost_usd,omitempty"`
+    Error            string    `json:"error,omitempty"`
+    IP               string    `json:"ip,omitempty"`
 }
 
 var (
@@ -429,21 +434,25 @@ var (
 )
 
 // LogHistory appends a request entry to the in-memory history ring buffer.
-func LogHistory(model, provider, status, errStr, ip string, latencyMs float64) {
+func LogHistory(model, provider, status, errStr, ip string, latencyMs float64, promptTokens, completionTokens int) {
     mu.Lock()
     defer mu.Unlock()
 
     historyID++
     entry := &HistoryEntry{
-        ID:        historyID,
-        Timestamp: time.Now(),
-        Method:    "POST",
-        Model:     model,
-        Provider:  provider,
-        Status:    status,
-        LatencyMs: latencyMs,
-        Error:     errStr,
-        IP:        ip,
+        ID:               historyID,
+        Timestamp:        time.Now(),
+        Ts:               time.Now().Unix(),
+        Method:           "POST",
+        Model:            model,
+        Provider:         provider,
+        Status:           status,
+        Ms:               latencyMs,
+        LatencyMs:        latencyMs,
+        PromptTokens:     promptTokens,
+        CompletionTokens: completionTokens,
+        Error:            errStr,
+        IP:               ip,
     }
 
     if len(history) >= maxHistory {

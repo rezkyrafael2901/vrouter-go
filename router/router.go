@@ -73,9 +73,9 @@ func NewRouter(cfg *config.Config) *Router {
 // ---------------------------------------------------------------------------
 
 // logReq logs a request to the history ring buffer.
-func logReq(c *fiber.Ctx, model, provider, status, errMsg string, latencyMs float64) {
+func logReq(c *fiber.Ctx, model, provider, status, errMsg string, latencyMs float64, promptTokens, completionTokens int) {
 	ip := c.IP()
-	stats.LogHistory(model, provider, status, errMsg, ip, latencyMs)
+	stats.LogHistory(model, provider, status, errMsg, ip, latencyMs, promptTokens, completionTokens)
 }
 
 // HandleRequest — main handler for POST /v1/chat/completions
@@ -256,14 +256,14 @@ func (rt *Router) routeCombo(c *fiber.Ctx, combo *config.Combo, reqBody map[stri
 		data, err := rt.forwardRequest(p, model, reqBody)
 		if err == nil {
 			latMs := float64(time.Since(start).Milliseconds())
-			logReq(c, model, p.Name, "ok", "", latMs)
+			logReq(c, model, p.Name, "ok", "", latMs, 0, 0)
 			c.Set("Content-Type", "application/json")
 			return c.Send(data)
 		}
 		fmt.Printf("[routeCombo] non-stream route %s failed: %v\n", model, err)
 	}
 
-	logReq(c, combo.Name, "", "error", "all combo routes failed", 0)
+	logReq(c, combo.Name, "", "error", "all combo routes failed", 0, 0, 0)
 	return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "all combo routes failed"})
 }
 
@@ -405,7 +405,7 @@ func (rt *Router) routeWithFallback(c *fiber.Ctx, providers []*provider.Provider
 			"error": fmt.Sprintf("all providers failed, last error: %v", lastErr),
 		})
 	}
-	logReq(c, model, "", "error", "no successful provider response", 0)
+	logReq(c, model, "", "error", "no successful provider response", 0, 0, 0)
 	return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "no successful provider response"})
 }
 
@@ -610,7 +610,7 @@ func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model strin
 		p.RecordSuccess()
 		stats.RecordModelResult(p.Name, model, ttftMs, true)
 		stats.RecordThroughput(p.Name, model, ttftMs, 0, first.n/4)
-		logReq(c, model, p.Name, "ok", "", ttftMs)
+		logReq(c, model, p.Name, "ok", "", ttftMs, 0, 0)
 
 		// Write first chunk (strip null bytes from upstream)
 		cleanFirst := stripNullBytes(first.data)
@@ -674,7 +674,7 @@ func (rt *Router) streamWithFailover(c *fiber.Ctx, routes []config.ComboRoute, r
 		return err
 	}
 
-	logReq(c, reqBody["model"].(string), "", "error", "all streaming providers failed", 0)
+	logReq(c, reqBody["model"].(string), "", "error", "all streaming providers failed", 0, 0, 0)
 	return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "all streaming providers failed"})
 }
 
@@ -719,7 +719,7 @@ func (rt *Router) hedgeRequest(c *fiber.Ctx, combo *config.Combo, providers []*p
 
 	if first.err == nil && first.data != nil {
 		stats.RecordModelResult(first.name, combo.Name, float64(first.lat.Milliseconds()), true)
-		logReq(c, combo.Name, first.name, "ok", "", float64(first.lat.Milliseconds()))
+		logReq(c, combo.Name, first.name, "ok", "", float64(first.lat.Milliseconds()), 0, 0)
 		c.Set("Content-Type", "application/json")
 		return c.Send(first.data)
 	}
@@ -728,7 +728,7 @@ func (rt *Router) hedgeRequest(c *fiber.Ctx, combo *config.Combo, providers []*p
 	second := <-ch
 	if second.err == nil && second.data != nil {
 		stats.RecordModelResult(second.name, combo.Name, float64(second.lat.Milliseconds()), true)
-		logReq(c, combo.Name, second.name, "ok", "", float64(second.lat.Milliseconds()))
+		logReq(c, combo.Name, second.name, "ok", "", float64(second.lat.Milliseconds()), 0, 0)
 		c.Set("Content-Type", "application/json")
 		return c.Send(second.data)
 	}
