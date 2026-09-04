@@ -2128,7 +2128,7 @@ function costGaugeBar(totalCost, todayCost){
 /* ═══ Activity Feed ═══ */
 function renderActivityFeed(){
   api('/api/history').then(d=>{
-    const items=(d.items||[]).slice(0,15);
+    const items=(d.history||d.items||[]).slice(0,15);
     const el=$('activityFeed');
     if(!el)return;
     if(!items.length){el.innerHTML='<div style="text-align:center;color:var(--text3);padding:20px;font-size:13px">Belum ada activity</div>';return}

@@ -123,6 +123,7 @@ func (a *API) handleStatus(c *fiber.Ctx) error {
 		"providers":             provs,
 		"combos":                combos,
 		"proxies":               []string{},
+		"history":               stats.AllHistory(),
 	})
 }
 
