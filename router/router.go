@@ -256,7 +256,8 @@ func (rt *Router) routeCombo(c *fiber.Ctx, combo *config.Combo, reqBody map[stri
 		data, err := rt.forwardRequest(p, model, reqBody)
 		if err == nil {
 			latMs := float64(time.Since(start).Milliseconds())
-			logReq(c, model, p.Name, "ok", "", latMs, 0, 0)
+			pIn, pOut := parseTokens(data)
+			logReq(c, model, p.Name, "ok", "", latMs, pIn, pOut)
 			c.Set("Content-Type", "application/json")
 			return c.Send(data)
 		}
@@ -387,7 +388,9 @@ func (rt *Router) routeWithFallback(c *fiber.Ctx, providers []*provider.Provider
 
 		if err == nil {
 			p.RecordSuccess()
+			pIn, pOut := parseTokens(respData)
 			stats.RecordModelResult(p.Name, model, latencyMs, true)
+			logReq(c, model, p.Name, "ok", "", latencyMs, pIn, pOut)
 
 			c.Set("Content-Type", "application/json")
 			return c.Send(respData)
@@ -610,7 +613,9 @@ func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model strin
 		p.RecordSuccess()
 		stats.RecordModelResult(p.Name, model, ttftMs, true)
 		stats.RecordThroughput(p.Name, model, ttftMs, 0, first.n/4)
-		logReq(c, model, p.Name, "ok", "", ttftMs, 0, 0)
+		// Estimate prompt tokens from request body size, completion tracked below
+		promptTok := len(jsonBody) / 4
+		logReq(c, model, p.Name, "ok", "", ttftMs, promptTok, 0)
 
 		// Write first chunk (strip null bytes from upstream)
 		cleanFirst := stripNullBytes(first.data)
@@ -621,12 +626,17 @@ func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model strin
 			flusher.Flush()
 		}
 
+		// Track tokens from stream content
+		totalCompletion := first.n / 4 // estimate from bytes
+
 		// Stream remaining
 		buf := make([]byte, 4096)
 		for {
 			n, err := reader.Read(buf)
 			if n > 0 {
-				c.Write(stripNullBytes(buf[:n]))
+				clean := stripNullBytes(buf[:n])
+				c.Write(clean)
+				totalCompletion += len(clean) / 4 // rough token estimate
 				if flusher != nil {
 					flusher.Flush()
 				}
@@ -718,8 +728,9 @@ func (rt *Router) hedgeRequest(c *fiber.Ctx, combo *config.Combo, providers []*p
 	wg.Wait()
 
 	if first.err == nil && first.data != nil {
+		fIn, fOut := parseTokens(first.data)
 		stats.RecordModelResult(first.name, combo.Name, float64(first.lat.Milliseconds()), true)
-		logReq(c, combo.Name, first.name, "ok", "", float64(first.lat.Milliseconds()), 0, 0)
+		logReq(c, combo.Name, first.name, "ok", "", float64(first.lat.Milliseconds()), fIn, fOut)
 		c.Set("Content-Type", "application/json")
 		return c.Send(first.data)
 	}
@@ -727,8 +738,9 @@ func (rt *Router) hedgeRequest(c *fiber.Ctx, combo *config.Combo, providers []*p
 	// Try the other one
 	second := <-ch
 	if second.err == nil && second.data != nil {
+		sIn, sOut := parseTokens(second.data)
 		stats.RecordModelResult(second.name, combo.Name, float64(second.lat.Milliseconds()), true)
-		logReq(c, combo.Name, second.name, "ok", "", float64(second.lat.Milliseconds()), 0, 0)
+		logReq(c, combo.Name, second.name, "ok", "", float64(second.lat.Milliseconds()), sIn, sOut)
 		c.Set("Content-Type", "application/json")
 		return c.Send(second.data)
 	}
@@ -801,6 +813,24 @@ func (rt *Router) StartHealthCheckLoop() {
 			rt.HealthCheck()
 		}
 	}()
+}
+
+// ---------------------------------------------------------------------------
+// Token extraction helper
+// ---------------------------------------------------------------------------
+
+// parseTokens extracts prompt_tokens and completion_tokens from upstream response JSON.
+func parseTokens(data []byte) (prompt, completion int) {
+	var resp struct {
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &resp); err == nil && resp.Usage != nil {
+		return resp.Usage.PromptTokens, resp.Usage.CompletionTokens
+	}
+	return 0, 0
 }
 
 // ---------------------------------------------------------------------------
