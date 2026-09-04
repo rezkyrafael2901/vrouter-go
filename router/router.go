@@ -22,7 +22,7 @@ import (
 
 const (
 	TTFTTimeout      = 5 * time.Second  // pre-first-token failover window
-	StreamIdleTimeout = 60 * time.Second // max total stream duration
+	StreamIdleTimeout = 15 * time.Second // max wait for upstream response before failover
 )
 
 // ---------------------------------------------------------------------------
@@ -198,11 +198,16 @@ func (rt *Router) healthyProviders() []*provider.Provider {
 // ---------------------------------------------------------------------------
 
 func (rt *Router) routeCombo(c *fiber.Ctx, combo *config.Combo, reqBody map[string]interface{}) error {
-	// Collect healthy providers from combo routes
+	// Collect unique healthy providers from combo routes
+	seen := make(map[string]bool)
 	var providers []*provider.Provider
 	for _, route := range combo.Routes {
+		if seen[route.Provider] {
+			continue
+		}
 		if p, ok := rt.Providers[route.Provider]; ok && p.IsHealthy() && p.HasKeys() {
 			providers = append(providers, p)
+			seen[route.Provider] = true
 		}
 	}
 
@@ -230,7 +235,25 @@ func (rt *Router) routeCombo(c *fiber.Ctx, combo *config.Combo, reqBody map[stri
 		return rt.streamWithFailover(c, routes, reqBody)
 	}
 
-	return rt.routeWithFallback(c, providers, combo.Name, reqBody)
+	// Non-stream: try routes in order via fallback
+	for _, route := range routes {
+		p, ok := rt.Providers[route.Provider]
+		if !ok || !p.IsHealthy() || !p.HasKeys() {
+			continue
+		}
+		model := route.Model
+		if model == "" {
+			model, _ = reqBody["model"].(string)
+		}
+		data, err := rt.forwardRequest(p, model, reqBody)
+		if err == nil {
+			c.Set("Content-Type", "application/json")
+			return c.Send(data)
+		}
+		fmt.Printf("[routeCombo] non-stream route %s failed: %v\n", model, err)
+	}
+
+	return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "all combo routes failed"})
 }
 
 // ---------------------------------------------------------------------------
@@ -423,7 +446,7 @@ func (rt *Router) forwardRequest(p *provider.Provider, model string, reqBody map
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
+			ResponseHeaderTimeout: 0, // no limit for non-streaming
 			IdleConnTimeout:       90 * time.Second,
 		},
 	}
