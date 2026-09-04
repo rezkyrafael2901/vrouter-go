@@ -481,6 +481,21 @@ func (rt *Router) forwardRequest(p *provider.Provider, model string, reqBody map
 }
 
 // ---------------------------------------------------------------------------
+// stripNullBytes removes null bytes and leading empty lines from SSE data.
+func stripNullBytes(data []byte) []byte {
+	cleaned := make([]byte, 0, len(data))
+	for _, b := range data {
+		if b != 0 {
+			cleaned = append(cleaned, b)
+		}
+	}
+	i := 0
+	for i < len(cleaned) && cleaned[i] == byte('\n') {
+		i++
+	}
+	return cleaned[i:]
+}
+
 // streamUpstream — SSE streaming with pre-first-token failover + TTFT timeout
 // ---------------------------------------------------------------------------
 
@@ -569,6 +584,7 @@ func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model strin
 	firstCh := make(chan struct {
 		n   int
 		err error
+		data []byte
 	}, 1)
 	go func() {
 		buf := make([]byte, 4096)
@@ -576,7 +592,8 @@ func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model strin
 		firstCh <- struct {
 			n   int
 			err error
-		}{n, err}
+			data []byte
+		}{n, err, buf[:n]}
 	}()
 
 	ttftTimer := time.NewTimer(TTFTTimeout)
@@ -595,19 +612,21 @@ func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model strin
 		stats.RecordThroughput(p.Name, model, ttftMs, 0, first.n/4)
 		logReq(c, model, p.Name, "ok", "", ttftMs)
 
-		// Write first chunk
-		buf := make([]byte, 4096)
-		copy(buf[:first.n], buf[:first.n])
-		c.Write(buf[:first.n])
+		// Write first chunk (strip null bytes from upstream)
+		cleanFirst := stripNullBytes(first.data)
+		if len(cleanFirst) > 0 {
+			c.Write(cleanFirst)
+		}
 		if flusher != nil {
 			flusher.Flush()
 		}
 
 		// Stream remaining
+		buf := make([]byte, 4096)
 		for {
 			n, err := reader.Read(buf)
 			if n > 0 {
-				c.Write(buf[:n])
+				c.Write(stripNullBytes(buf[:n]))
 				if flusher != nil {
 					flusher.Flush()
 				}
