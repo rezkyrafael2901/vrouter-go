@@ -35,6 +35,18 @@ type Router struct {
 	Combos    map[string]*config.Combo      // keyed by combo name
 	Config    *config.Config
 	mu        sync.RWMutex
+
+	// Shared HTTP clients — connection pooling, TLS reuse (biggest latency win)
+	httpClient   *http.Client
+	streamClient *http.Client
+
+	// Model lookup index: "JEROUTER/mimo-v2.5-free" → (provider, strippedModel)
+	modelIndex map[string]modelEntry
+}
+
+type modelEntry struct {
+	provider *provider.Provider
+	model    string
 }
 
 // NewRouter builds a Router from the loaded config.
@@ -43,6 +55,43 @@ func NewRouter(cfg *config.Config) *Router {
 		Providers: make(map[string]*provider.Provider),
 		Combos:    make(map[string]*config.Combo),
 		Config:    cfg,
+	}
+
+	// Shared non-streaming client: keep-alive, connection pooling
+	r.httpClient = &http.Client{
+		Timeout: 120 * time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 60 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout:  0,
+			IdleConnTimeout:       180 * time.Second,
+			MaxIdleConns:          200,
+			MaxIdleConnsPerHost:   100,
+			MaxConnsPerHost:       0,
+			DisableCompression:    false,
+			DisableKeepAlives:     false,
+		},
+	}
+
+	// Shared streaming client: long-lived connections for SSE
+	r.streamClient = &http.Client{
+		Timeout: 300 * time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 120 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout:  0,
+			IdleConnTimeout:       300 * time.Second,
+			MaxIdleConns:          200,
+			MaxIdleConnsPerHost:   100,
+			MaxConnsPerHost:       0,
+			DisableKeepAlives:     false,
+		},
 	}
 
 	for _, pc := range cfg.Providers {
@@ -67,7 +116,35 @@ func NewRouter(cfg *config.Config) *Router {
 		r.Combos[combo.Name] = combo
 	}
 
+	// Build model lookup index for O(1) resolution
+	r.buildModelIndex()
+
 	return r
+}
+
+// buildModelIndex constructs a fast lookup map for model resolution.
+// Keys: "PREFIX/model", "NAME/model", "model" (exact match)
+func (rt *Router) buildModelIndex() {
+	rt.modelIndex = make(map[string]modelEntry)
+	for _, p := range rt.Providers {
+		for _, m := range p.Models {
+			if m == "*" {
+				continue
+			}
+			// "PREFIX/model" entry
+			if p.Prefix != "" {
+				key := p.Prefix + "/" + m
+				rt.modelIndex[key] = modelEntry{provider: p, model: m}
+			}
+			// "NAME/model" entry
+			key := p.Name + "/" + m
+			rt.modelIndex[key] = modelEntry{provider: p, model: m}
+			// Exact model name entry (first wins)
+			if _, exists := rt.modelIndex[m]; !exists {
+				rt.modelIndex[m] = modelEntry{provider: p, model: m}
+			}
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -129,40 +206,44 @@ func (rt *Router) HandleRequest(c *fiber.Ctx) error {
 // ---------------------------------------------------------------------------
 
 func (rt *Router) resolveModel(reqModel string) (*provider.Provider, string) {
+	// Fast path: O(1) index lookup
+	rt.mu.RLock()
+	if entry, ok := rt.modelIndex[reqModel]; ok && entry.provider.IsHealthy() {
+		rt.mu.RUnlock()
+		return entry.provider, entry.model
+	}
+	rt.mu.RUnlock()
+
+	// Slow path: prefix stripping + wildcard + fallback (rare)
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
 
-	// 1) Exact model match on any provider
-	for _, p := range rt.Providers {
-		if p.IsHealthy() && rt.providerHasModel(p, reqModel) {
-			return p, reqModel
-		}
-	}
-
-	// 2) Prefix match: "JEROUTER/f/mimo-v2.5-free" → strip "JEROUTER/" and find provider
+	// Try prefix-based strip
 	for name, p := range rt.Providers {
 		if p.Prefix != "" && strings.HasPrefix(reqModel, p.Prefix) {
 			stripped := strings.TrimPrefix(reqModel, p.Prefix)
-			stripped = strings.TrimPrefix(stripped, "/") // strip separator
-			if rt.providerHasModel(p, stripped) || rt.providerHasModel(p, "*") {
+			stripped = strings.TrimPrefix(stripped, "/")
+			if p.IsHealthy() {
 				return p, stripped
 			}
 		}
-		// Also try using the provider name as a prefix
+		// Name as prefix
 		if strings.HasPrefix(reqModel, name+"/") {
 			stripped := strings.TrimPrefix(reqModel, name+"/")
-			return p, stripped
+			if p.IsHealthy() {
+				return p, stripped
+			}
 		}
 	}
 
-	// 3) Wildcard model provider
+	// Wildcard model provider
 	for _, p := range rt.Providers {
 		if p.IsHealthy() && rt.providerHasModel(p, "*") {
 			return p, reqModel
 		}
 	}
 
-	// 4) Fallback to any healthy provider
+	// Fallback to any healthy provider
 	for _, p := range rt.Providers {
 		if p.IsHealthy() {
 			return p, reqModel
@@ -417,7 +498,10 @@ func (rt *Router) routeWithFallback(c *fiber.Ctx, providers []*provider.Provider
 // ---------------------------------------------------------------------------
 
 func (rt *Router) forwardRequest(p *provider.Provider, model string, reqBody map[string]interface{}) ([]byte, error) {
-	// Resolve model — only use DefaultModel when no specific model resolved
+	// Fast-fail if provider is locked (single atomic RLock read)
+	if p.IsLocked() {
+		return nil, fmt.Errorf("provider %s circuit breaker is locked", p.Name)
+	}
 	upstreamModel := model
 	if upstreamModel == "" || upstreamModel == "*" {
 		if p.DefaultModel != "" {
@@ -453,19 +537,7 @@ func (rt *Router) forwardRequest(p *provider.Provider, model string, reqBody map
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
-	client := &http.Client{
-		Timeout: 120 * time.Second,
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   10 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 0, // no limit for non-streaming
-			IdleConnTimeout:       90 * time.Second,
-		},
-	}
-	resp, err := client.Do(req)
+	resp, err := rt.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
@@ -546,20 +618,7 @@ func (rt *Router) streamUpstream(c *fiber.Ctx, p *provider.Provider, model strin
 	req = req.WithContext(ctx)
 
 	start := time.Now()
-	streamClient := &http.Client{
-		Timeout: 120 * time.Second, // overall client timeout
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   10 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			Proxy:                  nil,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout:  0, // disabled for streaming — slow models need time before first byte
-			IdleConnTimeout:       90 * time.Second,
-		},
-	}
-	resp, err := streamClient.Do(req)
+	resp, err := rt.streamClient.Do(req)
 	if err != nil {
 		p.RecordFailure("stream connect: " + err.Error())
 		return err
